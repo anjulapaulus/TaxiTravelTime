@@ -9,7 +9,6 @@ import time
 import matplotlib
 import datetime
 import requests
-import json
 from sklearn.cluster import MiniBatchKMeans
 
 matplotlib.use('nbagg')
@@ -40,16 +39,17 @@ def preprocess_dataset(filepath):
                       ]
     # convert date into unix timestamp
     time_df = time_duration_data_frame(manhattan_df)
+
     # remove outliers based on trip duration
     duration_filter_df = time_df[(time_df.trip_duration > 0) & (time_df.trip_duration < 720)]
-    print("Duration", len(duration_filter_df))
+
     # # remove outlier based on speed
     speed_filter_df = duration_filter_df[(duration_filter_df.Speed > 0) & (duration_filter_df.Speed < 48.6)]
-    print("Speed", len(speed_filter_df))
+
     # # remove outliers based on distance
     distance_filter_df = speed_filter_df[(speed_filter_df.trip_distance > 0) & (speed_filter_df.trip_distance < 22.25)]
-    print("Distance", len(distance_filter_df))
-    distance_filter_df.to_csv("preprocessed_dataset.csv")
+
+    return distance_filter_df
 
 
 def preprocess_dataset_osrm(filepath):
@@ -57,8 +57,6 @@ def preprocess_dataset_osrm(filepath):
     df = get_distance(df)
     df.to_csv("Datasets/distance_df.csv")
 
-
-# def preprocess_dataset():
 
 def convert_datetime_to_unix(s):
     return time.mktime(datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S").timetuple())
@@ -95,7 +93,8 @@ def get_route_distance(pickup_lon, pickup_lat, dropoff_lon, dropoff_lat):
         return 0
     res = r.json()
     route_distance = res.get("routes")[0]['distance']
-    return route_distance
+    route_duration = res.get("routes")[0]['duration']
+    return route_distance, route_duration
 
 
 # append osrm distance to dataframe
@@ -143,33 +142,33 @@ def create_pickup_bins(df, month, year):
 
 
 # get unique time bins where pickups are present for each cluster
-def get_unique_bins(df):
+def get_unique_bins(dataframe):
     values = []
     for i in range(0, clusters):
-        new = df[df['pickup_cluster'] == i]
+        new = dataframe[dataframe['pickup_cluster'] == i]
         list_unqiue = list(set(new['pickup_bins']))
         list_unqiue.sort()
         values.append(list_unqiue)
     return values
 
 
-num_of_10_min_bins = 31 * 24 * (60 / 10)
+num_of_10_min_bins = int(31 * 24 * (60 / 10))
 
 
 # fill zeros for bins where pickups are not present
-# def fill_zeros_bin(count, val):
-#     smooth_region = []
-#     index = 0
-#     for r in range(0, clusters):
-#         smooth_bins = []
-#         for i in range(num_of_10_min_bins):
-#             if i in val[r]:
-#                 smooth_bins.append(count[index])
-#                 index += 1
-#             else:
-#                 smooth_bins.append(0)
-#         smooth_region.extend(smooth_bins)
-#     return smooth_region
+def fill_zeros_bin(count, val):
+    smooth_region = []
+    index = 0
+    for r in range(0, clusters):
+        smooth_bins = []
+        for i in range(num_of_10_min_bins):
+            if i in val[r]:
+                smooth_bins.append(count[index])
+                index += 1
+            else:
+                smooth_bins.append(0)
+        smooth_region.extend(smooth_bins)
+    return smooth_region
 
 def smooth(count, val):
     regions_smooth = []
@@ -224,9 +223,9 @@ def smooth(count, val):
     return regions_smooth
 
 
-def smooth_pickup_bins_dataset(df):
-    df_unique = get_unique_bins(df)
-    df_group = df[['pickup_cluster', 'pickup_bins', 'trip_distance']].groupby(
+def smooth_pickup_bins_dataset(dataframe):
+    df_unique = get_unique_bins(dataframe)
+    df_group = dataframe[['pickup_cluster', 'pickup_bins', 'trip_distance']].groupby(
         ['pickup_cluster', 'pickup_bins']).count()
 
     # df_fill = fill_zeros_bin(df_group['trip_distance'].values, df_unique)
@@ -235,14 +234,20 @@ def smooth_pickup_bins_dataset(df):
 
     return df_smooth
 
+
+def preprocess(filepath, month, year, name):
+    # Step 1
+    dataFrame = preprocess_dataset(filepath)
+    # Step 2
+    cluster_df = create_clusters(dataFrame)
+
+    pickup_df = create_pickup_bins(cluster_df, month, year)
+
+    pickup_df.to_csv(name)
+
+
 if __name__ == '__main__':
-            # Step 1
-            # preprocess_dataset("Datasets/yellow_tripdata_2013-08.csv")
-
-            # Step 2
-            # df = pd.read_csv("preprocessed_dataset.csv")
-            # cluster_df = create_clusters(df)
-            # pickup_df = create_pickup_bins(cluster_df,8,2013)
-            # pickup_df.to_csv("cluster_pickup_bins_dataset.csv")
-
-            # Step 3
+    preprocess("Datasets/yellow_tripdata_2013-08.csv", 8,  2013,  "Datasets/preprocess_2013_08.csv")
+    preprocess("Datasets/yellow_tripdata_2014-08.csv", 8,  2014,  "Datasets/preprocess_2014_08.csv")
+    preprocess("Datasets/yellow_tripdata_2014-09.csv", 9,  2014,  "Datasets/preprocess_2014_09.csv")
+    preprocess("Datasets/yellow_tripdata_2014-10.csv", 10, 2014,  "Datasets/preprocess_2014_10.csv")
