@@ -176,6 +176,7 @@ def exponential_wap_predictions(ratio):
 
 
 def smoothing_bins():
+
     df_2013_08 = pd.read_csv("Datasets/preprocess_2013_08.csv")
     df_2014_08 = pd.read_csv("Datasets/preprocess_2014_08.csv")
     df_2014_09 = pd.read_csv("Datasets/preprocess_2014_09.csv")
