@@ -1,267 +1,34 @@
 import pandas as pd
 import numpy as np
-from BaseLineModels import get_unique_bins
-from BaseLineModels import smooth
-from BaseLineModels import fill_zeros_bin
+import pickle
+import math
+
+from numpy import absolute
+from scipy.stats import spearmanr
 from sklearn.cluster import KMeans, MiniBatchKMeans
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, train_test_split, RepeatedKFold, cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import SGDRegressor
 from sklearn.model_selection import RandomizedSearchCV
+from sklearn.metrics import mean_absolute_error
+from numpy import cov
+import xgboost as xgb
+import catboost as cb
 
-time_stamps = 5
-
-outputList = []
-
-lat = []
-lon = []
-weekday = []
-tsne_feature = []
-tsne_feature = [0] * time_stamps
-
-alpha = 0.3
-predicted_values = []
-predict_list = []
-tsne_flat_exp_avg = []
+desired_width = 320
 
 
-def prepare_for_split(regions_cumulative, kmeans):
-    global tsne_feature, predicted_values, predicted_value
-    final_df = pd.DataFrame(columns=['f_1', 'a_1', 'f_2', 'a_2', 'f_3', 'a_3', 'f_4', 'a_4', 'f_5', 'a_5'])
-
-    for i in range(0, 30):
-        # amplitutude €& frequecy are calcualted &  saved in dataframe
-        aug_amp = np.fft.fft(np.array(regions_cumulative[i][0:4464]))
-        aug_freq = np.fft.fftfreq(4464, 1)
-
-        sep_amp = list(np.fft.fft(np.array(regions_cumulative[i])[4464:(4464 + 4464)]))
-        sep_freq = list(np.fft.fftfreq(4464, 1))
-
-        oct_amp = list(np.fft.fft(np.array(regions_cumulative[i])[(4464 + 4464):(4320 + 4464 + 4464)]))
-        oct_freq = list(np.fft.fftfreq(4320, 1))
-
-        aug_df = pd.DataFrame(data=aug_freq, columns=['Freq'])
-        aug_df = pd.DataFrame(data=aug_amp, columns=['Amp'])
-        sep_df = pd.DataFrame(data=sep_freq, columns=['Freq'])
-        sep_df = pd.DataFrame(data=sep_amp, columns=['Amp'])
-        oct_df = pd.DataFrame(data=oct_freq, columns=['Freq'])
-        oct_df = pd.DataFrame(data=oct_amp, columns=['Amp'])
-
-        aug_df_list = []
-        sep_df_list = []
-        oct_df_list = []
-
-        aug_df_sort = aug_df.sort_values(by=['Amp'], ascending=False)[:5].reset_index(drop=True).T
-        sep_df_sort = sep_df.sort_values(by=['Amp'], ascending=False)[:5].reset_index(drop=True).T
-        oct_df_sort = oct_df.sort_values(by=['Amp'], ascending=False)[:5].reset_index(drop=True).T
-        # print(aug_df_sort['Amp'][0])
-        # print(type(fram_jan_sort['Freq'][0]))
-        for j in range(0, 5):
-            aug_df_list.append(float(aug_df_sort[j]))
-            aug_df_list.append(float(aug_df_sort[j]))
-
-            sep_df_list.append(float(sep_df_sort[j]))
-            sep_df_list.append(float(sep_df_sort[j]))
-
-            oct_df_list.append(float(oct_df_sort[j]))
-            oct_df_list.append(float(oct_df_sort[j]))
-
-        data1 = [aug_df_list] * 4464
-        data2 = [sep_df_list] * 4464
-        data3 = [oct_df_list] * 4320
-
-        column_names = ['f_1', 'a_1', 'f_2', 'a_2', 'f_3', 'a_3', 'f_4', 'a_4', 'f_5', 'a_5']
-        aug_df_new = pd.DataFrame(data=data1, columns=column_names)
-        sep_df_new = pd.DataFrame(data=data2, columns=column_names)
-        oct_df_new = pd.DataFrame(data=data3, columns=column_names)
-
-        final_df = final_df.append(aug_df_new, ignore_index=True)
-        final_df = final_df.append(sep_df_new, ignore_index=True)
-        final_df = final_df.append(oct_df_new, ignore_index=True)
-
-        lat.append([kmeans.cluster_centers_[i][0]] * 13243)  # 4464+4464+4320-5
-        lon.append([kmeans.cluster_centers_[i][1]] * 13243)
-
-        # aug 1st 2014 is friday, so we start our day from 4: "(int(k/144))%7+5"
-        # our prediction start from 5th 10min intravel since we need to have number of pickups that are happened in last 5 pickup bins
-        weekday.append([int(((int(k / 144)) % 7 + 5) % 7) for k in range(5, 4464 + 4464 + 4320)])
-
-        # regions_cum is a list of lists [[x1,x2,x3..x13104], [x1,x2,x3..x13104], [x1,x2,x3..x13104], [x1,x2,x3..x13104], [x1,x2,x3..x13104], .. 40 lsits]
-        tsne_feature = np.vstack((tsne_feature, [regions_cumulative[i][r:r + time_stamps] for r in
-                                                 range(0, len(regions_cumulative[i]) - time_stamps)]))
-        outputList.append(regions_cumulative[i][5:])
-
-    tsne_feature = tsne_feature[1:]
-
-    final_df.drop(['f_1'], axis=1, inplace=True)
-
-    final_df = final_df
-    final_df = final_df.fillna(0)
-    # print(final_df.head(1))
-    # print(tsne_feature.shape)
-    # print(final_df.shape)
-    # print(len(lat[0]) * len(lon) == tsne_feature.shape[0] == len(weekday) * len(weekday[0]) == 30 * 13243 == len(
-    #     outputList) * len(outputList[0]))
-
-    for r in range(0, 30):
-        for i in range(0, 13248):
-            if i == 0:
-                predicted_value = regions_cumulative[r][0]
-                predicted_values.append(0)
-                continue
-            predicted_values.append(predicted_value)
-            predicted_value = int((alpha * predicted_value) + (1 - alpha) * (regions_cumulative[r][i]))
-        predict_list.append(predicted_values[5:])
-        predicted_values = []
-
-    # print("size of train data :", int(13243 * 0.75))
-    # print("size of test data :", int(13243 * 0.25))
-    # size of train data : 9932
-    # size of test data : 3310
-
-    train_features = [tsne_feature[i * 13243:(13243 * i + 9932)] for i in range(0, 30)]
-    test_features = [tsne_feature[(13243 * i) + 9932:13243 * (i + 1)] for i in range(0, 30)]
-
-    # print(train_features[0])
-    # print(test_features[0])
-    final_train_df = pd.DataFrame(columns=['a_1', 'f_2', 'a_2', 'f_3', 'a_3',
-                                           'f_4', 'a_4', 'f_5', 'a_5'])
-    final_test_df = pd.DataFrame(columns=['a_1', 'f_2', 'a_2', 'f_3', 'a_3',
-                                          'f_4', 'a_4', 'f_5', 'a_5'])
-    for i in range(0, 30):
-        # print(fram_final[i*13099:(13099*i+9824)])
-        final_train_df = final_train_df.append(final_df[i * 13243:(13243 * i + 9932)])
-    final_train_df.reset_index(inplace=True)
-
-    for i in range(0, 30):
-        # print(fram_final[(13099*(i))+9824:13099*(i+1)])
-        final_test_df = final_test_df.append(final_df[(13243 * i) + 9932:13243 * (i + 1)])
-    final_test_df.reset_index(inplace=True)
-
-    final_test_df.drop(['index'], axis=1, inplace=True)
-    final_train_df.drop(['index'], axis=1, inplace=True)
-
-    # print(final_train_df.head(1)) #fine
-    # print(final_test_df.head(1))
-
-    # print("Number of data clusters", len(train_features), "Number of data points in trian data", len(train_features[0]),
-    #       "Each data point contains", len(train_features[0][0]), "features")
-    # print("Number of data clusters", len(train_features), "Number of data points in test data", len(test_features[0]),
-    #       "Each data point contains", len(test_features[0][0]), "features")
-
-    # extracting first 9932 timestamp values i.e 75% of 13243 (total timestamps) for our training data
-    train_flat_lat = [i[:9932] for i in lat]
-    train_flat_lon = [i[:9932] for i in lon]
-    train_flat_weekday = [i[:9932] for i in weekday]
-    train_flat_output = [i[:9932] for i in outputList]
-    train_flat_exp_avg = [i[:9932] for i in predict_list]
-
-    # extracting the rest of the timestamp values i.e 25% of 13243 (total timestamps) for our test data
-    test_flat_lat = [i[9932:] for i in lat]
-    test_flat_lon = [i[9932:] for i in lon]
-    test_flat_weekday = [i[9932:] for i in weekday]
-    test_flat_output = [i[9932:] for i in outputList]
-    test_flat_exp_avg = [i[9932:] for i in predict_list]
-
-    # the above contains values in the form of list of lists
-    # (i.e. list of values of each region), here we make all of them in one list
-    train_new_features = []
-    for i in range(0, 30):
-        train_new_features.extend(train_features[i])
-    test_new_features = []
-    for i in range(0, 30):
-        test_new_features.extend(test_features[i])
-
-    # converting lists of lists into sinle list i.e flatten
-    # a  = [[1,2,3,4],[4,6,7,8]]
-    # print(sum(a,[]))
-    # [1, 2, 3, 4, 4, 6, 7, 8]
-
-    train_lat = sum(train_flat_lat, [])
-    train_lon = sum(train_flat_lon, [])
-    train_weekday = sum(train_flat_weekday, [])
-    train_output = sum(train_flat_output, [])
-    train_exp_avg = sum(train_flat_exp_avg, [])
-
-    test_lat = sum(test_flat_lat, [])
-    test_lon = sum(test_flat_lon, [])
-    test_weekday = sum(test_flat_weekday, [])
-    test_output = sum(test_flat_output, [])
-    test_exp_avg = sum(test_flat_exp_avg, [])
-
-    # Preparing the data frame for our train data
-    columns = ['ft_5', 'ft_4', 'ft_3', 'ft_2', 'ft_1']
-    df_train = pd.DataFrame(data=train_new_features, columns=columns)
-    df_train['lat'] = train_lat
-    df_train['lon'] = train_lon
-    df_train['weekday'] = train_weekday
-    df_train['exp_avg'] = train_exp_avg
-
-    # Preparing the data frame for our train data
-    df_test = pd.DataFrame(data=test_new_features, columns=columns)
-    df_test['lat'] = test_lat
-    df_test['lon'] = test_lon
-    df_test['weekday'] = test_weekday
-    df_test['exp_avg'] = test_exp_avg
-
-    df_test_lm = pd.concat([df_test, final_test_df], axis=1)
-    df_train_lm = pd.concat([df_train, final_train_df], axis=1)
-    # df_train_lm=df_train_lm.isnull().fillna(0)
-    # print(df_test_lm.head())
-    # print(df_train_lm.head())
-    # print(df_test_lm.columns)
-    # print(df_train_lm.columns)
-
-    # nan_rows = df_train_lm[df_train_lm.isnull().T.any().T]
-    # print(nan_rows)
-    # print(df_train_lm.head(3))
-    return df_train_lm, df_test_lm, train_output
+def prepare(df):
+    df = pd.concat([df, pd.get_dummies(df['hour_of_day'], prefix='hrs')], axis=1)
+    # df = pd.concat([df, pd.get_dummies(df['week_day'], prefix='day')], axis=1)
+    # df = pd.concat([df, pd.get_dummies(df['clusters'], prefix='route')], axis=1)
+    # df.drop(df.columns[[0, 1, 2, 3, 4, 5, 8, 16, 17, 18, 19, 20]], axis=1, inplace=True)
+    print(df.head())
 
 
-def split():
-    # aug 31- 31*24*60/10 = 4464 time bins - 10 min
-    # oct 31 - 31*24*60/10 = 4464 time bins - 10 min
-    # Nov 30 -  30*24*60/10 = 4320 time bins - 10 min
-    regions_cum = []
-
-    df_2013_08 = pd.read_csv("Datasets/preprocess_2013_08.csv")
-    df_2014_08 = pd.read_csv("Datasets/preprocess_2014_08.csv")
-    df_2014_09 = pd.read_csv("Datasets/preprocess_2014_09.csv")
-    df_2014_10 = pd.read_csv("Datasets/preprocess_2014_10.csv")
-
-    # df_unique_2013_08 = get_unique_bins(df_2013_08)
-    df_unique_2014_08 = get_unique_bins(df_2014_08)
-    df_unique_2014_09 = get_unique_bins(df_2014_09)
-    df_unique_2014_10 = get_unique_bins(df_2014_10)
-
-    # group_2013_08 = df_2013_08[['pickup_cluster', 'pickup_bins', 'trip_distance']].groupby(
-    # ['pickup_cluster', 'pickup_bins']).count()
-    group_2014_08 = df_2014_08[['pickup_cluster', 'pickup_bins', 'trip_distance']].groupby(
-        ['pickup_cluster', 'pickup_bins']).count()
-    group_2014_09 = df_2014_09[['pickup_cluster', 'pickup_bins', 'trip_distance']].groupby(
-        ['pickup_cluster', 'pickup_bins']).count()
-    group_2014_10 = df_2014_10[['pickup_cluster', 'pickup_bins', 'trip_distance']].groupby(
-        ['pickup_cluster', 'pickup_bins']).count()
-
-    # smooth_2013_08 = smooth(group_2013_08['trip_distance'].values, df_unique_2013_08)
-    smooth_2014_08 = fill_zeros_bin(group_2014_08['trip_distance'].values, df_unique_2014_08)
-    smooth_2014_09 = fill_zeros_bin(group_2014_09['trip_distance'].values, df_unique_2014_09)
-    smooth_2014_10 = fill_zeros_bin(group_2014_10['trip_distance'].values, df_unique_2014_10)
-
-    for i in range(0, 30):
-        regions_cum.append(
-            smooth_2014_08[4464 * i:4464 * (i + 1)] + smooth_2014_09[4464 * i:4464 * (i + 1)] + smooth_2014_10[4320 * i:
-                                                                                                               4320 * (
-                                                                                                                       i + 1)])
-    coords = df_2013_08[['pickup_latitude', 'pickup_longitude']].values
-    kmeans = MiniBatchKMeans(n_clusters=30, batch_size=10000, random_state=42).fit(coords)
-    train, test, output = prepare_for_split(regions_cum, kmeans)
-    linear_regression(train, test, output)
-
-
-def linear_regression(train, test, train_output):
+def linear_regression(train, test, train_output, test_output):
     std_train = StandardScaler().fit_transform(train)
     std_test = StandardScaler().fit_transform(test)
     # parameter tuning
@@ -279,13 +46,21 @@ def linear_regression(train, test, train_output):
     clf = SGDRegressor(loss="squared_loss", penalty="l2", alpha=best_alpha)
     clf.fit(std_train, train_output)
 
-    y_pred = clf.predict(std_test)
-    lr_test_predictions = [round(value) for value in y_pred]
-    y_pred = clf.predict(std_train)
-    lr_train_predictions = [round(value) for value in y_pred]
+    # y_pred = clf.predict(std_test)
+    # lr_test_predictions = [round(value) for value in y_pred]
+    # y_pred = clf.predict(std_train)
+    # lr_train_predictions = [round(value) for value in y_pred]
+
+    # print((mean_absolute_error(train_output, lr_train_predictions)) / (sum(train_output) / len(train_output)))
+    # print((mean_absolute_error(test_output, lr_test_predictions)) / (sum(test_output) / len(test_output)))
+
+    pkl_file = "linear_regression.pkl"
+
+    with open(pkl_file, 'wb') as file:
+        pickle.dump(clf, file)
 
 
-def random_forest_regression(train, test, train_output):
+def random_forest_regression(train, test, train_output, test_output):
     # Hyper parameter tuning
     C = [10, 20, 40]
     random_clf = RandomForestRegressor(n_jobs=-1)
@@ -302,11 +77,165 @@ def random_forest_regression(train, test, train_output):
                                  n_jobs=-1)
     clf1.fit(train, train_output)
 
-    y_pred = clf1.predict(test)
-    rndf_test_predictions = [round(value) for value in y_pred]
-    y_pred = clf1.predict(train)
-    rndf_train_predictions = [round(value) for value in y_pred]
+    # y_pred = clf1.predict(test)
+    # rndf_test_predictions = [round(value) for value in y_pred]
+    # y_pred = clf1.predict(train)
+    # rndf_train_predictions = [round(value) for value in y_pred]
+    #
+    # print('Random Forest Train MAE: ', (mean_absolute_error(train_output, rndf_train_predictions)) / (sum(train_output) / len(train_output)))
+    # print('Random Forest Test MAE: ', (mean_absolute_error(test_output, rndf_test_predictions)) / (sum(test_output) / len(test_output)))
+
+    pkl_file = "random_forest_regression.pkl"
+
+    with open(pkl_file, 'wb') as file:
+        pickle.dump(clf1, file)
+
+
+def xgb_regression(x_train, x_test, y_train, y_test):
+    # Hyper parameter tuning
+    # params = {
+    #     'n_estimators': [300, 350, 400, 450, 500],
+    #     'max_depth': [2, 3, 4, 5]
+    # }
+
+    # model = xgb.XGBRegressor()
+    # grid = GridSearchCV(model, params, cv=2, n_jobs=5, verbose=True)
+    # grid.fit(x_train, y_train)
+    # print(grid.best_score_)
+    # print(grid.best_params_)
+
+    xgbReg = xgb.XGBRegressor(max_depth=5, n_estimators=350, verbosity=3, eval_metric="mae")
+
+    xgbReg.fit(x_train, y_train)
+    # y_pred = xgbReg.predict(x_test)
+
+    pkl_file = "xgb_regression.pkl"
+
+    with open(pkl_file, 'wb') as file:
+        pickle.dump(xgbReg, file)
+
+    xg_MAE = []
+    xg_RMSE = []
+    xg_MAPE = []
+    y_pred = []
+
+    folds = 5
+    for k in range(folds):
+        # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+        xg = xgbReg
+        xg.fit(x_train, y_train)
+        y_pred = xg.predict(x_test)
+        xg_MAE.append(mae(y_test, y_pred))
+        xg_RMSE.append(rmse(y_test, y_pred))
+        xg_MAPE.append(mape(y_test, y_pred))
+
+    print('Metrics for XGB')
+    print('_______________________________________')
+    print('MAE : ', np.mean(xg_MAE))
+    print('RMSE : ', np.mean(xg_RMSE))
+    print('MAPE : ', np.mean(xg_MAPE))
+    print('Spearman Cofficient: ', spearmanr(y_pred, y_test))
+
+    pkl_file = "xgb_regression.pkl"
+
+    with open(pkl_file, 'wb') as file:
+        pickle.dump(xgbReg, file)
+
+
+# Calculate mean absolute error
+def mae(actual, predicted):
+    sum_error = 0.0
+    for i in range(len(actual)):
+        sum_error += abs(predicted[i] - actual[i])
+    return sum_error / float(len(actual))
+
+
+def mape(actual, pred):
+    actual, pred = np.array(actual), np.array(pred)
+    return np.mean(np.abs((actual - pred) / actual)) * 100
+
+
+def rmse(actual, predicted):
+    sum_error = 0.0
+    for i in range(len(actual)):
+        prediction_error = predicted[i] - actual[i]
+        sum_error += (prediction_error ** 2)
+    mean_error = sum_error / float(len(actual))
+    return math.sqrt(mean_error)
+
+
+def catboost_regression(x_train, x_test, y_train, y_test):
+    params = {'iterations': [400, 450, 500, 600, 650],
+              'learning_rate': [0.1, 0.2, 0.3],
+              'depth': [2, 4, 6, 8],
+              'l2_leaf_reg': [0.2, 0.5, 1, 3]}
+    model = cb.CatBoostRegressor()
+
+    # random = model.grid_search(grid, X=train, y=train_output)
+
+    grid = GridSearchCV(model, params, cv=2, n_jobs=5, verbose=True)
+    grid.fit(x_train, y_train)
+    print(grid.best_score_)
+    print(grid.best_params_)
+
+    # clf = cb.CatBoostRegressor(depth=random['params']['depth'], iterations=random['params']['iterations'],
+    #                            learning_rate=random['params']['learning_rate'],
+    #                            l2_leaf_reg=random['params']['l2_leaf_reg'])
+    #
+    # clf.fit(X=train, y=train_output)
+    # pkl_file = "catboost_regression.pkl"
+    #
+    # with open(pkl_file, 'wb') as file:
+    #     pickle.dump(clf, file)
+    # y_pred = clf.predict(test)
+    # # {'depth': 6, 'iterations': 200, 'learning_rate': 0.1, 'l2_leaf_reg': 0.5}
+    # cat_test_predictions = [round(value) for value in y_pred]
+    # y_pred = clf.predict(train)
+    # cat_train_predictions = [round(value) for value in y_pred]
+    # print('CatBoost Train MAE: ', (mean_absolute_error(train_output, cat_train_predictions)) / (sum(train_output) / len(train_output)))
+    # print('CatBoost Test MAE: ', (mean_absolute_error(test_output, cat_test_predictions)) / (sum(test_output) / len(test_output)))
+    # trainMAE = (mean_absolute_error(train_output, cat_train_predictions)) / (sum(train_output) / len(train_output))
+    # testMAE = (mean_absolute_error(test_output, cat_test_predictions)) / (sum(test_output) / len(test_output))
+    # trainMSE = mean_squared_error(train_output, cat_train_predictions)
+    # trainRMSE = math.sqrt(trainMSE)
+    # testMSE = mean_squared_error(test_output, cat_test_predictions)
+    # testRMSE = math.sqrt(testMSE)
+    # trainMAPE = mean_absolute_percentage_error(train_output, cat_train_predictions)
+    # testMAPE = mean_absolute_percentage_error(test_output, cat_test_predictions)
+    # trainSpearman = spearmanr(train_output, cat_train_predictions)
+    # testSpearman = spearmanr(train_output, cat_train_predictions)
+    # print('Train MAE: ', trainMAE)
+    # print('Test MAE: ', testMAE)
+    # print('Train RMSE: ', trainRMSE)
+    # print('Test RMSE: ', testRMSE)
+
+    # random = model.predict(X_test)
+    # rmse = (np.sqrt(mean_squared_error(y_test, pred)))
+    # r2 = r2_score(y_test, pred)
+    # print("Testing performance")
+    # print('RMSE: {:.2f}'.format(rmse))
+    # print('R2: {:.2f}'.format(r2))
+    # 0.20153229645731532
+    # 0.17286462748497383
+
+
+# def meta_learning():
 
 
 if __name__ == '__main__':
-    split()
+    pd.set_option('display.width', desired_width)
+
+    np.set_printoptions(linewidth=desired_width)
+
+    pd.set_option('display.max_columns', 20)
+    # split()
+    df = pd.read_csv('Datasets/preprocessed.csv')
+    # print(df.columns)
+    x_data = df[['pickup_longitude', 'pickup_latitude', 'dropoff_longitude', 'dropoff_latitude', 'week_day', 'bin',
+                 'pickup_cluster', 'dropoff_cluster', 'osrm_distance', 'osrm_duration', 'steps', 'intersections']]
+    y_data = df['trip_duration']
+
+    x_train, x_test, y_train, y_test = train_test_split(x_data, y_data, test_size=0.2, shuffle=True)
+
+    xgb_regression(x_train, x_test, y_train, y_test)
+    # catboost_regression(x_train, x_test, y_train, y_test)
