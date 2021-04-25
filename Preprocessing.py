@@ -1,6 +1,7 @@
 import pandas as pd
 import requests
 from sklearn.cluster import KMeans
+import math
 import numpy as np
 import pickle
 from sklearn.ensemble import IsolationForest
@@ -40,10 +41,12 @@ def preprocess_dataset(filepath):
 
     manhattan_df['speed'] = (manhattan_df['trip_distance'] / manhattan_df['trip_duration']) * 60
 
-    manhattan_df['bin'] = (manhattan_df['pickup_datetime'].sub(manhattan_df['pickup_datetime'].min())
-                           .dt.floor('10Min')
-                           .rank(method='dense')
-                           .astype(int))
+    # manhattan_df['bin'] = (manhattan_df['pickup_datetime'].sub(manhattan_df['pickup_datetime'].min())
+    #                        .dt.floor('10Min')
+    #                        .rank(method='dense')
+    #                        .astype(int))
+
+    manhattan_df['bin'] = math.ceil(df['pickup_datetime'].minute / 5)
 
     # clustering pickup points and drop points
     kmeans_p = KMeans(n_clusters=30).fit(manhattan_df[['pickup_latitude', 'pickup_longitude']])
@@ -141,18 +144,19 @@ def iqr_bounds(data, iqr_threshold=1.5, verbose=False):
 
 
 def outlier_detection_using_isolation_forest(df):
-    iso = IsolationForest(contamination=0.1)
+    iso = IsolationForest(contamination=0.3)
     iso.fit(df['trip_distance'].values.reshape(-1, 1))
     df['anomaly_score_trip_distance'] = iso.decision_function(df['trip_distance'].values.reshape(-1, 1))
     df['anomaly_trip_distance'] = iso.predict(df['trip_distance'].values.reshape(-1, 1))
 
-    # df['anomaly_trip_duration'] = iso.fit_predict(df['trip_duration'])
+    df['anomaly_trip_duration'] = iso.fit_predict(df['trip_duration'])
 
     print(len(df['anomaly_trip_distance'] == -1))
     print(len(df['anomaly_trip_distance'] == 1))
-    # print(df.head(1))
-    # print(np.max(df['anomaly_trip_distance']))
-    # print(len(df[df['anomaly_trip_duration'] == '-1']))
+
+    print(len(df['anomaly_trip_distance'] == -1))
+    print(len(df['anomaly_trip_distance'] == 1))
+
 
 
 if __name__ == '__main__':
@@ -170,20 +174,27 @@ if __name__ == '__main__':
     # osrm_df.to_csv('Datasets/osrm_08_2013.csv')
 
     df1 = pd.read_csv('Datasets/osrm_08_2013.csv')
-    # df1.drop(['Unnamed: 0', 'Unnamed: 0.1', 'passenger_count', 'speed', 'clusters'], axis='columns',
-    #          inplace=True)
-    #
-    # df1['distance_ratio'] = (df1['trip_distance'] * 1.60934) / df1['osrm_distance']
-    # df1['duration_ratio'] = df1['trip_duration'] / df1['osrm_duration']
-    #
-    # lower_dist, upper_dist = iqr_bounds(df1['distance_ratio'])
-    # lower_dura, upper_dura = iqr_bounds(df1['duration_ratio'])
-    # df1 = df1[(df1.distance_ratio >= upper_dist) & (df1.duration_ratio >= upper_dura)]
-    # df1.replace([np.inf, -np.inf], np.nan, inplace=True)
-    # df1.dropna(inplace=True)
-    # df1.drop(['distance_ratio', 'duration_ratio', 'hour_of_day', 'pickup_datetime', 'dropoff_datetime',
-    #           'trip_distance'], axis='columns', inplace=True)
-    # df1.to_csv('Datasets/preprocessed.csv')
+    df1.drop(['Unnamed: 0', 'Unnamed: 0.1', 'passenger_count', 'speed', 'clusters'], axis='columns',
+             inplace=True)
+
+    # remove outliers based on distance and duration ratio
+    df1['distance_ratio'] = (df1['trip_distance'] * 1.60934) / df1['osrm_distance']
+    df1['duration_ratio'] = df1['trip_duration'] / df1['osrm_duration']
+    lower_dist, upper_dist = iqr_bounds(df1['distance_ratio'])
+    lower_dura, upper_dura = iqr_bounds(df1['duration_ratio'])
+    df1 = df1[(df1.distance_ratio >= upper_dist) & (df1.duration_ratio >= upper_dura)]
+
+    # remove infinte and nan values
+    df1.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df1.dropna(inplace=True)
+    df1.drop(['bin'], axis='columns', inplace=True)
+    df1['pickup_datetime'] = pd.to_datetime(df1['pickup_datetime'])
+    # df1['bin'] = math.ceil(df1['pickup_datetime'].dt.minute / 10)
+    df1['bin'] = df1['pickup_datetime'].apply(lambda x: math.ceil(x.minute / 10))
+    df1.drop(['distance_ratio', 'duration_ratio', 'pickup_datetime', 'dropoff_datetime',
+              'trip_distance'], axis='columns', inplace=True)
+    df1.to_csv('Datasets/preprocessed.csv')
+
     ## outlier_detection_using_isolation_forest(df1)
-    # kmeans_p = KMeans(n_clusters=30).fit(df1[['pickup_latitude', 'pickup_longitude']])
-    # pickle.dump(kmeans_p, open("kmeans.pkl", "wb"))
+    kmeans_p = KMeans(n_clusters=30).fit(df1[['pickup_latitude', 'pickup_longitude']])
+    pickle.dump(kmeans_p, open("kmeans.pkl", "wb"))
