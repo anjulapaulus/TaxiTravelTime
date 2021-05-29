@@ -20,7 +20,7 @@ def preprocess_dataset(filepath):
     # Drop null values in dataset
     df = df.dropna(subset=['dropoff_longitude', 'dropoff_latitude'])
 
-    # Filter pickup locations and drop locations within manhattan
+        # Filter pickup locations and drop locations within manhattan
     manhattan_df = df[(df.pickup_latitude > 40.7091) &
                       (df.pickup_latitude < 40.8205) &
                       (df.pickup_longitude > -74.0096) &
@@ -41,22 +41,13 @@ def preprocess_dataset(filepath):
 
     manhattan_df['speed'] = (manhattan_df['trip_distance'] / manhattan_df['trip_duration']) * 60
 
-    # manhattan_df['bin'] = (manhattan_df['pickup_datetime'].sub(manhattan_df['pickup_datetime'].min())
-    #                        .dt.floor('10Min')
-    #                        .rank(method='dense')
-    #                        .astype(int))
-
-    manhattan_df['bin'] = math.ceil(df['pickup_datetime'].minute / 5)
+    manhattan_df['bin'] = manhattan_df['pickup_datetime'].apply(lambda x: math.ceil(x.minute / 10))
 
     # clustering pickup points and drop points
     kmeans_p = KMeans(n_clusters=30).fit(manhattan_df[['pickup_latitude', 'pickup_longitude']])
-    # kmeans_d = KMeans(n_clusters=30).fit(manhattan_df[['dropoff_latitude', 'dropoff_longitude']])
     manhattan_df['pickup_cluster'] = kmeans_p.predict(manhattan_df[['pickup_latitude', 'pickup_longitude']])
     manhattan_df['dropoff_cluster'] = kmeans_p.predict(manhattan_df[['dropoff_latitude', 'dropoff_longitude']])
-    # manhattan_df['clusters'] = manhattan_df['pickup_cluster'].map(str) + manhattan_df['dropoff_cluster'].map(str)
-    # manhattan_df.to_csv('Datasets/preprocess_08_2013.csv')
     filtered_df_2013_08 = filter_outliers(manhattan_df)
-    # print(filtered_df_2013_08.columns)
     filtered_df_2013_08.to_csv('filtered_df_2013_08.csv')
 
 
@@ -121,16 +112,6 @@ def get_distance(df):
     return df
 
 
-def preprocess(filepath, month, year, name):
-    # Step 1
-    dataFrame = preprocess_dataset(filepath)
-    # Step 2
-    # cluster_df= create_clusters(dataFrame)
-
-    # pickup_df = create_pickup_bins(cluster_df, month, year)
-
-    # pickup_df.to_csv(name)
-
 
 def iqr_bounds(data, iqr_threshold=1.5, verbose=False):
     q1 = data.quantile(0.25)
@@ -158,20 +139,12 @@ def outlier_detection_using_isolation_forest(df):
     print(len(df['anomaly_trip_distance'] == 1))
 
 
-
 if __name__ == '__main__':
-    # pd.set_option('display.width', 320)
+    preprocess_dataset('yellow_tripdata_2013-08.csv')
+    df = pd.read_csv('filtered_df_2013_08.csv')
 
-    # np.set_printoptions(linewidth=320)
-
-    # pd.set_option('display.max_columns', 30)
-
-    # df = pd.read_csv('Datasets/preprocess_08_2013.csv')
-    # filter_df = filter_outliers(df)
-    # df = pd.read_csv('filtered_df_2013_08.csv')
-    # print(df.columns)
-    # osrm_df = get_distance(df)
-    # osrm_df.to_csv('Datasets/osrm_08_2013.csv')
+    osrm_df = get_distance(df)
+    osrm_df.to_csv('Datasets/osrm_08_2013.csv')
 
     df1 = pd.read_csv('Datasets/osrm_08_2013.csv')
     df1.drop(['Unnamed: 0', 'Unnamed: 0.1', 'passenger_count', 'speed', 'clusters'], axis='columns',
@@ -187,14 +160,9 @@ if __name__ == '__main__':
     # remove infinte and nan values
     df1.replace([np.inf, -np.inf], np.nan, inplace=True)
     df1.dropna(inplace=True)
-    df1.drop(['bin'], axis='columns', inplace=True)
-    df1['pickup_datetime'] = pd.to_datetime(df1['pickup_datetime'])
-    # df1['bin'] = math.ceil(df1['pickup_datetime'].dt.minute / 10)
-    df1['bin'] = df1['pickup_datetime'].apply(lambda x: math.ceil(x.minute / 10))
     df1.drop(['distance_ratio', 'duration_ratio', 'pickup_datetime', 'dropoff_datetime',
               'trip_distance'], axis='columns', inplace=True)
     df1.to_csv('Datasets/preprocessed.csv')
 
-    ## outlier_detection_using_isolation_forest(df1)
-    kmeans_p = KMeans(n_clusters=30).fit(df1[['pickup_latitude', 'pickup_longitude']])
-    pickle.dump(kmeans_p, open("kmeans.pkl", "wb"))
+    outlier_detection_using_isolation_forest(df1)
+
